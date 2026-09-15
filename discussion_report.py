@@ -6,9 +6,11 @@ from ai_analyzer import PROBLEM_TYPES
 
 ISSUE_PROMPT = '''สรุปบทสนทนาผู้เล่นเป็นประเด็นย่อย ไม่ใช้หมวดเก่าเป็นขอบเขต
 ตอบ {"issues":[{"title":"หัวข้อชัดเจนไม่เกิน 90 ตัวอักษร", "evidence_ids":[1],
+"category":"technical|language|rewards|economy|questions|unresolved",
 "problem_type":"technical|economy|reward|balance|content|usability|social|service|expectation|unclear",
 "discussion":"ผู้เล่นพูดอะไร 1-2 ประโยค ไม่เกิน 320 ตัวอักษร",
 "knowledge_ids":[]}]}
+category ให้เลือกหมวดหลักตามเนื้อหา คำถามทั่วไปใช้ questions ถ้าไม่มีบริบทพอให้ unresolved และอย่าเดาว่าหมายถึงอะไร
 ทุกข้อความต้องอยู่หนึ่งประเด็นหลักพอดี ห้ามตกหล่นหรือซ้ำ เลือกประเด็นหลักเมื่อข้อความมีหลายเรื่อง
 แยกการอัปเดต การแปลภาษา การเข้า Total War และฟังก์ชัน launcher เป็นคนละประเด็น
 รวมคำรายงานเรื่องรางวัลกิจกรรมเดียวกัน แต่แยกต่างกิจกรรมหรือคนละเงื่อนไขเมื่อจำเป็น
@@ -21,6 +23,8 @@ ISSUE_PROMPT = '''สรุปบทสนทนาผู้เล่นเป�
 ไม่เสนอแผนงาน ทีมที่รับผิดชอบ หรือคำแนะนำให้ทีมทำต่อ ไม่ใส่จำนวนหรือระดับความรุนแรงเอง
 knowledge_ids ใช้เฉพาะเอกสารอนุมัติที่เกี่ยวกับประเด็นและเวอร์ชันตรงกัน'''
 REVIEW_PROMPT = '''ตรวจหลักฐานและข้อสรุป ตอบ {"approved":true|false,"reasons":["unsupported_claim|mixed_topics|repetition|team_actions|unknown_abbreviation"]}
+การคงคำย่อที่ผู้เล่นใช้ตามต้นฉบับโดยไม่ขยายความไม่ถือเป็น unknown_abbreviation
+unknown_abbreviation ใช้เฉพาะการเดาความหมายหรือขยายคำย่อโดยไม่มีหลักฐาน
 ให้ false หากแต่งข้อเท็จจริง ความรู้สึก จำนวน ผลกระทบ หรือความหมายคำย่อ
 ห้ามตีความคำถามว่าเกมอธิบายไม่ชัดโดยไม่มีหลักฐาน หรือข้อเสนอลดต้นทุนว่าผู้เล่นบอกต้นทุนสูง
 ห้ามยืนยันบั๊ก/สาเหตุ/กลไกเกมจากคำร้องเรียน ห้ามคำแนะนำหรือสิ่งที่ทีมควรทำต่อ
@@ -92,9 +96,12 @@ def _partition(values,expected):
 def validate_issues(result,items,knowledge):
     issues=result.get('issues') if isinstance(result,dict) else None
     if not isinstance(issues,list) or not issues: raise ValueError('Missing issues')
+    from grouped_report import CATEGORIES
     output=[];all_ids=[];known={k['id'] for k in knowledge}
     for issue in issues:
         clean=_text_fields(issue);ids=issue.get('evidence_ids');refs=issue.get('knowledge_ids')
+        if issue.get('category') not in (*CATEGORIES,'unresolved'):raise ValueError('Invalid category')
+        clean['category']=issue['category']
         if not isinstance(ids,list) or not ids: raise ValueError('Missing evidence')
         if not isinstance(refs,list) or any(not isinstance(k,str) or k not in known for k in refs):
             raise ValueError('Unknown knowledge')
@@ -133,14 +140,15 @@ async def build_discussion_report(builder,start,end,label):
             'knowledge_snapshot':knowledge,'sources':[dict(id=r['id'],content=r['content'],reference=source_ref(r)) for r in relevant],
             'issues':[],'analysis_missing_ids':[],'merge_incomplete':False,'errors':[]}
     deadline=time.monotonic()+builder.time_budget;candidates=[]
+    extraction_deadline=deadline-min(120,builder.time_budget*0.3)
     for offset in range(0,len(relevant),20):
         batch=relevant[offset:offset+20]
-        if time.monotonic()>=deadline:
+        if time.monotonic()>=extraction_deadline:
             ledger['analysis_missing_ids'].extend(r['id'] for r in relevant[offset:])
             ledger['errors'].append({'stage':'analysis','code':'timeout'});break
         from batch_processing import process_batch
         values,failed,errors,fatal=await process_batch(batch,
-            lambda rows:builder.ai.analyze_discussions(rows,knowledge),deadline,'discussion')
+            lambda rows:builder.ai.analyze_discussions(rows,knowledge),extraction_deadline,'discussion')
         candidates.extend(values)
         ledger['analysis_missing_ids'].extend(failed)
         ledger['errors'].extend(errors)
@@ -150,6 +158,9 @@ async def build_discussion_report(builder,start,end,label):
     ledger['batch_issues']=candidates
     ledger['issues']=candidates
     if candidates:
+        from grouped_report import fallback_digest
+        ledger['digest']=fallback_digest(candidates)
+        ledger['digest_fallback']=True
         try:
             if time.monotonic()>=deadline:raise TimeoutError()
             if len(candidates)>500:raise ValueError('Summary budget exceeded')
@@ -157,6 +168,7 @@ async def build_discussion_report(builder,start,end,label):
                 ledger['digest']=await builder.ai.summarize_overall(candidates,
                     {'total':len(items),'pending_classification':counts['pending'],
                      'pending_extraction':len(ledger['analysis_missing_ids'])})
+                ledger['digest_fallback']=False
         except Exception as exc:
             code=failure_code(exc)
             logging.getLogger(__name__).warning('Overall summary failed: code=%s',code)

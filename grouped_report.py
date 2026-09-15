@@ -50,6 +50,22 @@ def validate_digest(result,candidates):
             'overall_analysis':overall.strip()}
 
 
+def fallback_digest(candidates):
+    # Only approved extraction text is used, without generating any new claim.
+    groups=[];unresolved=[]
+    for category in CATEGORIES:
+        indices=[n for n,c in enumerate(candidates) if c.get('category')==category]
+        if not indices:continue
+        bullets=list(dict.fromkeys(candidates[n]['discussion'] for n in indices))
+        groups.append({'category':category,'candidate_ids':indices,
+            'evidence_ids':sorted({e for n in indices for e in candidates[n]['evidence_ids']}),
+            'bullets':bullets[:4],'additional_summaries':max(0,len(bullets)-4)})
+    for c in candidates:
+        if c.get('category') not in CATEGORIES:unresolved.extend(c['evidence_ids'])
+    return {'groups':groups,'unresolved_ids':sorted(set(unresolved)),
+        'overall_analysis':'ยังวิเคราะห์ภาพรวมไม่สำเร็จ แสดงเฉพาะสรุปข้อความที่ผ่านการตรวจหลักฐานแล้ว'}
+
+
 def render_grouped(label,items,counts,ledger):
     from reports import safe
     from discussion_report import ERROR_LABELS
@@ -62,6 +78,8 @@ def render_grouped(label,items,counts,ledger):
         lines.append(f'⚠️ ข้อมูลยังไม่ครบ: รอคัดแยก {counts["pending"]} ข้อความ และรอสรุปอีก {missing} ข้อความ (คนละชุดกัน)')
     digest=ledger.get('digest')
     if digest:
+        if ledger.get('digest_fallback'):
+            lines+=['','⚠️ การรวมรายงานยังไม่สำเร็จ แสดงสรุปที่ผ่านแล้วแยกตามหมวด เรื่องซ้ำข้ามชุดอาจยังไม่ถูกรวม']
         by_id={r['id']:r for r in items}
         for category,title in CATEGORIES.items():
             group=next((g for g in digest['groups'] if g['category']==category),None)
@@ -71,6 +89,8 @@ def render_grouped(label,items,counts,ledger):
             unknown=sum(not r.get('user_id') for r in rows)
             if unknown:lines.append(f'{unknown} ข้อความไม่ทราบ ID ผู้แจ้ง')
             lines+=['- '+safe(b) for b in group['bullets']]
+            if group.get('additional_summaries'):
+                lines.append(f'ยังมีสรุปอีก {group["additional_summaries"]} รายการในหมวดนี้ เก็บครบในหลักฐานรายงานแต่ยังไม่แสดงทั้งหมด')
         if digest['unresolved_ids']:
             lines+=['',f'อีก {len(digest["unresolved_ids"])} ข้อความยังระบุบริบทไม่ได้ จึงไม่นำมาสรุปเป็นปัญหาเกม']
         lines+=['','**วิเคราะห์ภาพรวม**',safe(digest['overall_analysis'])]

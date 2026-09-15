@@ -77,13 +77,13 @@ class AIAnalyzer:
     async def close(self):
         await self.api.close()
 
-    async def _json(self, instruction, data):
+    async def _json(self, instruction, data, schema=None):
         for attempt in range(2):
             correction='\nReturn exactly one valid JSON object, without Markdown.' if attempt else ''
             response=await self.api.request('POST','/responses',payload={
                 'model':self.model,'instructions':SYSTEM,
                 'input':[{'role':'user','content':instruction+correction+'\nDATA_JSON:\n'+json.dumps(data,ensure_ascii=False)}],
-                'text':{'format':{'type':'json_object'}},
+                'text':{'format':({'type':'json_schema','name':'tosm_output','strict':True,'schema':schema} if schema is not None else {'type':'json_object'})},
                 'reasoning':{'effort':'low'},'max_output_tokens':16000,'store':False
             },retry=True)
             if not isinstance(response,dict):
@@ -130,8 +130,9 @@ retention_signal เป็น true เฉพาะข้อความกล่
 ข้อความที่มีทั้งปัญหาและคุยเล่นให้เก็บเป็น issue; non_issue ใช้เฉพาะคุยเล่นหรือคำชมที่ไม่มีประเด็น'''
         from discussion_report import DiscussionError
         from validation_details import validation_detail
+        from output_schemas import normalization_schema
         for attempt in range(2):
-            result=await self._json(instruction,payload)
+            result=await self._json(instruction,payload,schema=normalization_schema(items))
             try:return validate_classifications(result,items)
             except ValueError as exc:
                 detail=validation_detail(exc)
@@ -139,13 +140,17 @@ retention_signal เป็น true เฉพาะข้อความกล่
                 instruction+='\nแก้ไขคำตอบให้ตรงเงื่อนไข: '+detail+' ทุก id ต้องครบและไม่ซ้ำ evidence_quote ต้องคัดตรงต้นฉบับ ห้ามเรียบเรียงใหม่'
 
 
-    async def _checked_discussions(self, instruction, data, validator):
+    async def _checked_discussions(self, instruction, data, validator, schema=None):
         from discussion_report import REVIEW_PROMPT, DiscussionError
         correction=''
         detail=''
+        previous=None
+        from output_schemas import REVIEW_SCHEMA
         from validation_details import validation_detail
         for attempt in range(2):
-            result=await self._json(instruction+correction,data)
+            payload=data if previous is None else {**data,'previous_answer':previous,'repair_reasons':detail}
+            result=await self._json(instruction+correction,payload,schema=schema)
+            previous=result
             try:
                 issues=validator(result)
             except ValueError as exc:
@@ -153,7 +158,7 @@ retention_signal เป็น true เฉพาะข้อความกล่
                 detail=validation_detail(exc)
                 correction='\nแก้เงื่อนไขนี้: '+detail
             else:
-                review=await self._json(REVIEW_PROMPT,{**data,'proposed_issues':issues})
+                review=await self._json(REVIEW_PROMPT,{**data,'proposed_issues':issues},schema=REVIEW_SCHEMA)
                 if isinstance(review,dict) and review.get('approved') is True:
                     return issues
                 allowed={'unsupported_claim','mixed_topics','repetition','team_actions','unknown_abbreviation'}
@@ -169,17 +174,19 @@ retention_signal เป็น true เฉพาะข้อความกล่
 
     async def analyze_discussions(self, items, knowledge):
         from discussion_report import validate_issues, ISSUE_PROMPT
+        from output_schemas import issue_schema
         data={'messages':[{'id':r['id'],'content':r['content']} for r in items],
               'approved_knowledge':knowledge}
         return await self._checked_discussions(ISSUE_PROMPT,data,
-                                               lambda result:validate_issues(result,items,knowledge))
+                                               lambda result:validate_issues(result,items,knowledge),schema=issue_schema(items,knowledge))
 
     async def summarize_overall(self, candidates, coverage):
         from grouped_report import DIGEST_PROMPT,validate_digest
+        from output_schemas import digest_schema
         data={'candidates':[dict(candidate_id=n,**issue) for n,issue in enumerate(candidates)],
               'coverage':coverage}
         return await self._checked_discussions(DIGEST_PROMPT,data,
-                                               lambda result:validate_digest(result,candidates))
+                                               lambda result:validate_digest(result,candidates),schema=digest_schema(candidates))
 
     async def merge_discussions(self, candidates):
         from discussion_report import MERGE_PROMPT, validate_merge
