@@ -39,7 +39,7 @@ def summarize(items):
 
 class ReportBuilder:
     def __init__(self, db, ai, tz='Asia/Bangkok', max_batch=20, max_total=1000,
-                 time_budget=480, max_rows=10000, prompt_version='tosm-overall-v6.1'):
+                 time_budget=480, max_rows=10000, prompt_version='tosm-luna-v7'):
         self.db=db; self.ai=ai; self.tz=ZoneInfo(tz)
         self.max_batch=max_batch; self.max_total=max_total
         self.time_budget=time_budget; self.max_rows=max_rows; self.prompt_version=prompt_version

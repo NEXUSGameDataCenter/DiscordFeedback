@@ -16,8 +16,8 @@ FEEDBACK_CHANNEL_ID = integer('FEEDBACK_CHANNEL_ID', 0, 0, 2**64)
 REPORT_CHANNEL_ID = integer('REPORT_CHANNEL_ID', 0, 0, 2**64)
 SUPABASE_URL = os.getenv('SUPABASE_URL', '').rstrip('/')
 SUPABASE_SECRET_KEY = os.getenv('SUPABASE_SECRET_KEY', '')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5.6-luna')
 TIMEZONE = os.getenv('TIMEZONE', 'Asia/Bangkok')
 DAILY_REPORT_TIME = os.getenv('DAILY_REPORT_TIME', '09:00')
 WEEKLY_REPORT_TIME = os.getenv('WEEKLY_REPORT_TIME', '09:00')
@@ -26,12 +26,12 @@ MAX_FEEDBACK_PER_BATCH = integer('MAX_FEEDBACK_PER_BATCH', 20, 1, 50)
 NORMALIZE_MAX_TOTAL = integer('NORMALIZE_MAX_TOTAL', 1000, 1, 10000)
 NORMALIZE_TIME_BUDGET = integer('NORMALIZE_TIME_BUDGET', 480, 30, 1200)
 REPORT_MAX_ROWS = integer('REPORT_MAX_ROWS', 10000, 1, 10000)
-PROMPT_VERSION = 'tosm-overall-v6.1'
+PROMPT_VERSION = 'tosm-luna-v7'
 
 def validate(database_only=False):
     names = ['SUPABASE_URL', 'SUPABASE_SECRET_KEY']
     if not database_only:
-        names += ['DISCORD_TOKEN', 'GUILD_ID', 'FEEDBACK_CHANNEL_ID', 'REPORT_CHANNEL_ID', 'GEMINI_API_KEY']
+        names += ['DISCORD_TOKEN', 'GUILD_ID', 'FEEDBACK_CHANNEL_ID', 'REPORT_CHANNEL_ID', 'OPENAI_API_KEY']
     missing = [name for name in names if not globals()[name]]
     if missing:
         raise RuntimeError('Missing settings: ' + ', '.join(missing))

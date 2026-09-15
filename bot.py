@@ -23,7 +23,7 @@ class TOSMBot(commands.Bot):
         intents=discord.Intents.default();intents.message_content=True
         super().__init__(command_prefix='!',intents=intents,allowed_mentions=discord.AllowedMentions.none())
         self.db=Database(config.SUPABASE_URL,config.SUPABASE_SECRET_KEY)
-        self.ai=AIAnalyzer(config.GEMINI_API_KEY,config.GEMINI_MODEL)
+        self.ai=AIAnalyzer(config.OPENAI_API_KEY,config.OPENAI_MODEL)
         self.reports=ReportBuilder(self.db,self.ai,config.TIMEZONE,config.MAX_FEEDBACK_PER_BATCH,
             config.NORMALIZE_MAX_TOTAL,config.NORMALIZE_TIME_BUDGET,config.REPORT_MAX_ROWS,config.PROMPT_VERSION)
         self.outbox=Outbox()
@@ -61,7 +61,7 @@ class TOSMBot(commands.Bot):
         await self.wait_until_ready()
 
     async def on_ready(self):
-        log.info('Connected as %s; model=%s',self.user,config.GEMINI_MODEL)
+        log.info('Connected as %s; model=%s',self.user,config.OPENAI_MODEL)
 
     async def capture(self,message):
         if message.author.bot or not message.guild or message.guild.id!=config.GUILD_ID:
@@ -201,7 +201,7 @@ async def renormalize(interaction:discord.Interaction,all_rows:bool=False):
 async def database_status(interaction:discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await bot.db.init()
-    await interaction.followup.send(f'Supabase พร้อม | โมเดล {config.GEMINI_MODEL} | '
+    await interaction.followup.send(f'Supabase พร้อม | โมเดล {config.OPENAI_MODEL} | '
                                    f'คิวรอส่ง {await bot.outbox.count()}',ephemeral=True)
 
 @bot.tree.command(name='scheduler_status',description='ตรวจเวลารายงานครั้งถัดไป')

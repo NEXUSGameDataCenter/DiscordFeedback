@@ -1,4 +1,4 @@
-"""Gemini 3.5 Flash-Lite, raw-message evidence and explicit TOSM analyst instructions."""
+"""GPT-5.6 Luna, raw-message evidence and explicit TOSM analyst instructions."""
 import json
 import re
 from http_client import JSONClient
@@ -67,12 +67,12 @@ def parse_json_reply(raw):
 
 
 class AIAnalyzer:
-    def __init__(self, api_key, model='gemini-3.5-flash-lite'):
-        if not re.fullmatch(r'gemini-[a-zA-Z0-9._-]+',model):
-            raise ValueError('GEMINI_MODEL must be a Gemini model ID')
+    def __init__(self, api_key, model='gpt-5.6-luna'):
+        if not re.fullmatch(r'gpt-[a-zA-Z0-9._-]+',model):
+            raise ValueError('OPENAI_MODEL must be an OpenAI GPT model ID')
         self.model = model
-        self.api = JSONClient('https://generativelanguage.googleapis.com/v1beta', {
-            'x-goog-api-key': api_key, 'Content-Type':'application/json'}, 'Gemini')
+        self.api = JSONClient('https://api.openai.com/v1', {
+            'Authorization':'Bearer '+api_key, 'Content-Type':'application/json'}, 'OpenAI')
 
     async def close(self):
         await self.api.close()
@@ -80,30 +80,39 @@ class AIAnalyzer:
     async def _json(self, instruction, data):
         for attempt in range(2):
             correction='\nReturn exactly one valid JSON object, without Markdown.' if attempt else ''
-            response=await self.api.request('POST', '/models/'+self.model+':generateContent',payload={
-                'systemInstruction':{'parts':[{'text':SYSTEM}]},
-                'contents':[{'role':'user','parts':[{'text':instruction+correction+'\nDATA_JSON:\n'+json.dumps(data,ensure_ascii=False)}]}],
-                'generationConfig':{'responseMimeType':'application/json','maxOutputTokens':16000}
+            response=await self.api.request('POST','/responses',payload={
+                'model':self.model,'instructions':SYSTEM,
+                'input':[{'role':'user','content':instruction+correction+'\nDATA_JSON:\n'+json.dumps(data,ensure_ascii=False)}],
+                'text':{'format':{'type':'json_object'}},
+                'reasoning':{'effort':'low'},'max_output_tokens':16000,'store':False
             },retry=True)
             if not isinstance(response,dict):
-                raise AIResponseError('Gemini returned an invalid response envelope')
-            candidates=response.get('candidates')
-            if not isinstance(candidates,list) or len(candidates)!=1 or not isinstance(candidates[0],dict):
-                raise AIResponseError('Gemini returned no usable candidate; check safety or response status')
-            candidate=candidates[0]
-            if candidate.get('finishReason')!='STOP':
-                reason=candidate.get('finishReason')
-                reason=reason if reason in ('MAX_TOKENS','SAFETY','RECITATION','OTHER','BLOCKLIST','PROHIBITED_CONTENT') else 'UNKNOWN'
-                raise AIResponseError('Gemini response incomplete: finishReason='+reason)
-            content=candidate.get('content')
-            parts=content.get('parts',[]) if isinstance(content,dict) else []
-            if not isinstance(parts,list):raise AIResponseError('Gemini invalid content parts')
-            raw='\n'.join(p['text'] for p in parts if isinstance(p,dict) and isinstance(p.get('text'),str) and not p.get('thought'))
-            try:
-                return parse_json_reply(raw)
+                raise AIResponseError('OpenAI returned an invalid response envelope')
+            if response.get('status')!='completed':
+                detail=response.get('incomplete_details')
+                reason=detail.get('reason') if isinstance(detail,dict) else None
+                reason=reason if reason in ('max_output_tokens','content_filter') else 'not_completed'
+                raise AIResponseError('OpenAI response incomplete: '+reason)
+            output=response.get('output')
+            if not isinstance(output,list):raise AIResponseError('OpenAI missing output list')
+            texts=[]
+            for item in output:
+                if not isinstance(item,dict):raise AIResponseError('OpenAI invalid output item')
+                if item.get('type')=='reasoning':continue
+                if item.get('type')!='message' or item.get('role')!='assistant' or item.get('status')!='completed':
+                    raise AIResponseError('OpenAI unexpected output item')
+                parts=item.get('content')
+                if not isinstance(parts,list):raise AIResponseError('OpenAI invalid message content')
+                for part in parts:
+                    if not isinstance(part,dict):raise AIResponseError('OpenAI invalid content part')
+                    if part.get('type')=='refusal':raise AIResponseError('OpenAI response refused')
+                    if part.get('type')!='output_text' or not isinstance(part.get('text'),str):
+                        raise AIResponseError('OpenAI unexpected content part')
+                    texts.append(part['text'])
+            try:return parse_json_reply('\n'.join(texts))
             except ValueError as exc:
                 if not attempt:continue
-                raise AIResponseError('Gemini JSON response rejected after 2 attempts: '+str(exc)) from None
+                raise AIResponseError('OpenAI JSON response rejected after 2 attempts: '+str(exc)) from None
 
     async def normalize_batch(self, items):
         # No lossy short-message prefilter and no 60-character normalization bottleneck.
