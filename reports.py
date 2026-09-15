@@ -39,7 +39,7 @@ def summarize(items):
 
 class ReportBuilder:
     def __init__(self, db, ai, tz='Asia/Bangkok', max_batch=20, max_total=1000,
-                 time_budget=480, max_rows=10000, prompt_version='tosm-overall-v6'):
+                 time_budget=480, max_rows=10000, prompt_version='tosm-overall-v6.1'):
         self.db=db; self.ai=ai; self.tz=ZoneInfo(tz)
         self.max_batch=max_batch; self.max_total=max_total
         self.time_budget=time_budget; self.max_rows=max_rows; self.prompt_version=prompt_version
@@ -53,15 +53,17 @@ class ReportBuilder:
                 token,items=await self.db.claim(min(self.max_batch,self.max_total-total))
                 if not items:
                     break
+                from batch_processing import process_batch
+                rows,failed,errors,fatal=await process_batch(items,self.ai.normalize_batch,end,'normalization')
                 try:
-                    async with asyncio.timeout(max(1,end-clock.monotonic())):
-                        rows=await self.ai.normalize_batch(items)
-                    total+=await self.db.complete(token,rows)
-                except Exception as exc:
-                    detail = str(exc) if isinstance(exc, (AIResponseError, RemoteError)) else type(exc).__name__
-                    logger.error('Normalization failed for %s messages: %s', len(items), detail)
+                    if rows:total+=await self.db.complete(token,rows)
+                except Exception:
                     await self.db.fail(token)
-                    # Stop on provider/config errors; failed rows are explicit and retryable.
+                    raise
+                # complete clears successful row leases; fail touches remaining leases only.
+                if failed:await self.db.fail(token)
+                if errors:
+                    logger.warning('Normalization incomplete: successful=%s failed=%s',len(rows),len(failed))
                     break
                 if not drain:
                     break

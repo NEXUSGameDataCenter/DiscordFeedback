@@ -38,9 +38,10 @@ MERGE_PROMPT = '''รวมประเด็นซ้ำจากทุกช�
 
 
 class DiscussionError(ValueError):
-    def __init__(self,code):
+    def __init__(self,code,detail=""):
         self.code=code
-        super().__init__('Discussion analysis: '+code)
+        self.detail=detail
+        super().__init__('Discussion analysis: '+code+(' ('+detail+')' if detail else ''))
 
 
 def failure_code(exc):
@@ -137,17 +138,15 @@ async def build_discussion_report(builder,start,end,label):
         if time.monotonic()>=deadline:
             ledger['analysis_missing_ids'].extend(r['id'] for r in relevant[offset:])
             ledger['errors'].append({'stage':'analysis','code':'timeout'});break
-        try:
-            async with asyncio.timeout(max(0.01,deadline-time.monotonic())):
-                candidates.extend(await builder.ai.analyze_discussions(batch,knowledge))
-        except Exception as exc:
-            code=failure_code(exc)
-            logging.getLogger(__name__).warning('Discussion batch failed: code=%s count=%s',code,len(batch))
-            ledger['errors'].append({'stage':'analysis','code':code,'source_ids':[r['id'] for r in batch]})
-            ledger['analysis_missing_ids'].extend(r['id'] for r in batch)
-            if code.startswith('http_') or code in ('version_mismatch','ai_response_invalid','connection_or_internal_error'):
-                ledger['analysis_missing_ids'].extend(r['id'] for r in relevant[offset+20:])
-                break
+        from batch_processing import process_batch
+        values,failed,errors,fatal=await process_batch(batch,
+            lambda rows:builder.ai.analyze_discussions(rows,knowledge),deadline,'discussion')
+        candidates.extend(values)
+        ledger['analysis_missing_ids'].extend(failed)
+        ledger['errors'].extend(errors)
+        if fatal:
+            ledger['analysis_missing_ids'].extend(r['id'] for r in relevant[offset+20:])
+            break
     ledger['batch_issues']=candidates
     ledger['issues']=candidates
     if candidates:

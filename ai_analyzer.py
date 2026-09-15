@@ -108,7 +108,7 @@ class AIAnalyzer:
     async def normalize_batch(self, items):
         # No lossy short-message prefilter and no 60-character normalization bottleneck.
         payload = [{'id':i['id'],'content':i['content']} for i in items]
-        result = await self._json('''จัดหมวดข้อความครบทุก id โดยอ่านข้อความต้นฉบับทั้งหมด
+        instruction='''จัดหมวดข้อความครบทุก id โดยอ่านข้อความต้นฉบับทั้งหมด
 แต่ละข้อความเลือกหมวดหลักเพียงหนึ่งหมวดเพื่อให้นับโดยไม่ซ้ำ (ไม่ได้อ้างว่ามีเพียงปัญหาเดียว)
 ถ้าไม่แน่ใจให้ disposition=uncertain ห้ามทิ้งเป็นคุยเล่น
 ตอบ {"items":[{"id":1,"disposition":"issue|uncertain|non_issue",
@@ -118,18 +118,31 @@ class AIAnalyzer:
 "retention_signal":false}]}
 retention_signal เป็น true เฉพาะข้อความกล่าวถึงเลิกเล่น/จะเลิก ไม่ใช่การยืนยันว่าเลิกจริง
 คำถามและข้อเสนอแนะเกี่ยวกับการเล่นให้เก็บเป็น issue หรือ uncertain ไม่ตัดเป็นคุยเล่น
-ข้อความที่มีทั้งปัญหาและคุยเล่นให้เก็บเป็น issue; non_issue ใช้เฉพาะคุยเล่นหรือคำชมที่ไม่มีประเด็น''', payload)
-        return validate_classifications(result, items)
+ข้อความที่มีทั้งปัญหาและคุยเล่นให้เก็บเป็น issue; non_issue ใช้เฉพาะคุยเล่นหรือคำชมที่ไม่มีประเด็น'''
+        from discussion_report import DiscussionError
+        from validation_details import validation_detail
+        for attempt in range(2):
+            result=await self._json(instruction,payload)
+            try:return validate_classifications(result,items)
+            except ValueError as exc:
+                detail=validation_detail(exc)
+                if attempt:raise DiscussionError('schema_invalid',detail) from None
+                instruction+='\nแก้ไขคำตอบให้ตรงเงื่อนไข: '+detail+' ทุก id ต้องครบและไม่ซ้ำ evidence_quote ต้องคัดตรงต้นฉบับ ห้ามเรียบเรียงใหม่'
+
 
     async def _checked_discussions(self, instruction, data, validator):
         from discussion_report import REVIEW_PROMPT, DiscussionError
         correction=''
+        detail=''
+        from validation_details import validation_detail
         for attempt in range(2):
             result=await self._json(instruction+correction,data)
             try:
                 issues=validator(result)
-            except ValueError:
+            except ValueError as exc:
                 code='schema_invalid'
+                detail=validation_detail(exc)
+                correction='\nแก้เงื่อนไขนี้: '+detail
             else:
                 review=await self._json(REVIEW_PROMPT,{**data,'proposed_issues':issues})
                 if isinstance(review,dict) and review.get('approved') is True:
@@ -138,9 +151,10 @@ retention_signal เป็น true เฉพาะข้อความกล่
                 reasons=review.get('reasons',[]) if isinstance(review,dict) else []
                 codes=[r for r in reasons if isinstance(r,str) and r in allowed] if isinstance(reasons,list) else []
                 code='review_rejected'
+                detail=','.join(codes) or 'review_reason_not_provided'
                 correction='\nแก้ข้อบกพร่องจากการตรวจ: '+(', '.join(codes) or 'review_rejected')
             if attempt:
-                raise DiscussionError(code)
+                raise DiscussionError(code,detail)
             correction+='\nสร้างใหม่ให้ตรง schema ทุกข้อความต้องอยู่หนึ่งประเด็นพอดี เขียนสั้นและใช้เฉพาะหลักฐาน อย่าเพิ่มสาเหตุหรือความรู้สึก'
         raise DiscussionError('schema_invalid')
 

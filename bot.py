@@ -14,7 +14,8 @@ from reports import ReportBuilder
 from scheduler import BotScheduler
 from spool import Outbox
 
-logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+from log_setup import configure_logging
+configure_logging()
 log=logging.getLogger('tosm')
 
 class TOSMBot(commands.Bot):
@@ -108,6 +109,8 @@ class TOSMBot(commands.Bot):
                     channel=self.get_channel(config.REPORT_CHANNEL_ID) or await self.fetch_channel(config.REPORT_CHANNEL_ID)
                     await self.send_report(channel.send,text,incomplete)
                     success=True
+                    if incomplete:log.warning("Report delivered with incomplete analysis: %s",kind)
+                    else:log.info("Report delivered with complete analysis: %s",kind)
             except Exception:
                 log.exception('Scheduled report failed: %s',kind)
             finally:
@@ -227,4 +230,4 @@ async def command_error(interaction,error):
 
 if __name__=='__main__':
     config.validate()
-    bot.run(config.DISCORD_TOKEN)
+    bot.run(config.DISCORD_TOKEN,log_handler=None)
